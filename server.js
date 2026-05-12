@@ -14,12 +14,24 @@ const REFRESH_SECRET = 'refresh_secret';
 const ACCESS_EXPIRES_IN = '15m';
 const REFRESH_EXPIRES_IN = '7d';
 
-const users = [];
+let products = [];
 const refreshTokens = new Set();
+
+// Пользователи с админом по умолчанию
+let users = [];
+const adminPasswordHash = bcrypt.hashSync('admin123', 10);
+users.push({
+  id: nanoid(),
+  email: 'admin@admin.com',
+  first_name: 'Admin',
+  last_name: 'Adminov',
+  passwordHash: adminPasswordHash,
+  role: 'admin'
+});
 
 function generateAccessToken(user) {
   return jwt.sign(
-    { sub: user.id, email: user.email, first_name: user.first_name, last_name: user.last_name },
+    { sub: user.id, email: user.email, role: user.role },
     ACCESS_SECRET,
     { expiresIn: ACCESS_EXPIRES_IN }
   );
@@ -48,8 +60,20 @@ function authMiddleware(req, res, next) {
   }
 }
 
+function roleMiddleware(allowedRoles) {
+  return (req, res, next) => {
+    if (!req.user) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+    if (!allowedRoles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Forbidden: insufficient permissions' });
+    }
+    next();
+  };
+}
+
 app.post('/api/auth/register', async (req, res) => {
-  const { email, first_name, last_name, password } = req.body;
+  const { email, first_name, last_name, password, role } = req.body;
   if (!email || !first_name || !last_name || !password) {
     return res.status(400).json({ error: 'All fields are required' });
   }
@@ -57,9 +81,10 @@ app.post('/api/auth/register', async (req, res) => {
     return res.status(400).json({ error: 'Email already exists' });
   }
   const passwordHash = await bcrypt.hash(password, 10);
-  const user = { id: nanoid(), email, first_name, last_name, passwordHash };
+  const userRole = role === 'seller' ? 'seller' : 'user';
+  const user = { id: nanoid(), email, first_name, last_name, passwordHash, role: userRole };
   users.push(user);
-  res.status(201).json({ id: user.id, email, first_name, last_name });
+  res.status(201).json({ id: user.id, email, first_name, last_name, role: user.role });
 });
 
 app.post('/api/auth/login', async (req, res) => {
@@ -106,9 +131,75 @@ app.post('/api/auth/refresh', (req, res) => {
 app.get('/api/auth/me', authMiddleware, (req, res) => {
   const user = users.find(u => u.id === req.user.sub);
   if (!user) return res.status(404).json({ error: 'User not found' });
-  res.json({ id: user.id, email: user.email, first_name: user.first_name, last_name: user.last_name });
+  res.json({ id: user.id, email: user.email, first_name: user.first_name, last_name: user.last_name, role: user.role });
+});
+
+app.get('/api/users', authMiddleware, roleMiddleware(['admin']), (req, res) => {
+  const usersList = users.map(u => ({ id: u.id, email: u.email, first_name: u.first_name, last_name: u.last_name, role: u.role }));
+  res.json(usersList);
+});
+
+app.get('/api/users/:id', authMiddleware, roleMiddleware(['admin']), (req, res) => {
+  const user = users.find(u => u.id === req.params.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  res.json({ id: user.id, email: user.email, first_name: user.first_name, last_name: user.last_name, role: user.role });
+});
+
+app.put('/api/users/:id', authMiddleware, roleMiddleware(['admin']), async (req, res) => {
+  const user = users.find(u => u.id === req.params.id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+  const { first_name, last_name, role } = req.body;
+  if (first_name) user.first_name = first_name;
+  if (last_name) user.last_name = last_name;
+  if (role && ['user', 'seller', 'admin'].includes(role)) user.role = role;
+  res.json({ id: user.id, email: user.email, first_name: user.first_name, last_name: user.last_name, role: user.role });
+});
+
+app.delete('/api/users/:id', authMiddleware, roleMiddleware(['admin']), (req, res) => {
+  const index = users.findIndex(u => u.id === req.params.id);
+  if (index === -1) return res.status(404).json({ error: 'User not found' });
+  users.splice(index, 1);
+  res.status(204).send();
+});
+
+app.get('/api/products', authMiddleware, (req, res) => {
+  res.json(products);
+});
+
+app.get('/api/products/:id', authMiddleware, (req, res) => {
+  const product = products.find(p => p.id === req.params.id);
+  if (!product) return res.status(404).json({ error: 'Product not found' });
+  res.json(product);
+});
+
+app.post('/api/products', authMiddleware, roleMiddleware(['seller', 'admin']), (req, res) => {
+  const { title, category, description, price } = req.body;
+  if (!title || !category || !description || price === undefined) {
+    return res.status(400).json({ error: 'All fields are required' });
+  }
+  const product = { id: nanoid(), title, category, description, price };
+  products.push(product);
+  res.status(201).json(product);
+});
+
+app.put('/api/products/:id', authMiddleware, roleMiddleware(['seller', 'admin']), (req, res) => {
+  const product = products.find(p => p.id === req.params.id);
+  if (!product) return res.status(404).json({ error: 'Product not found' });
+  const { title, category, description, price } = req.body;
+  if (title) product.title = title;
+  if (category) product.category = category;
+  if (description) product.description = description;
+  if (price !== undefined) product.price = price;
+  res.json(product);
+});
+
+app.delete('/api/products/:id', authMiddleware, roleMiddleware(['admin']), (req, res) => {
+  const index = products.findIndex(p => p.id === req.params.id);
+  if (index === -1) return res.status(404).json({ error: 'Product not found' });
+  products.splice(index, 1);
+  res.status(204).send();
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT}`);
+  console.log(`Server running on http://localhost:3000`);
 });
