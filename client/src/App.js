@@ -194,7 +194,7 @@ function App() {
           <button type="submit">{isLogin ? 'Войти' : 'Зарегистрироваться'}</button>
         </form>
         <button onClick={() => setIsLogin(!isLogin)}>
-          {isLogin ? 'Нет аккаунта? Зарегистрироваться' : 'Есть аккаунт? Войти'}
+          {isLogin ? 'Зарегистрироваться' : 'Есть аккаунт? Войти'}
         </button>
       </div>
     );
